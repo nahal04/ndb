@@ -7,7 +7,7 @@
 
 #define DATA_MAX 1024
 
-enum {TEXT_KEY, TEXT_VALUE, NDB_END, NDB_ERR};
+enum {TEXT_KEY, TEXT_VALUE, NDB_END};
 enum {NOOP, OP_GET, OP_SET, NDB_DATA, SYN_ERR};
 enum {RES_OK, RES_ERR};
 
@@ -63,13 +63,15 @@ token_stream *lex(char *inp) {
 	char *s = inp;
 	char data[DATA_MAX];
 	char *p = data;
-
+	
 	token_stream * ts = init_token_stream();
 
 	while (isblank(*s))
-		s++;
+	s++;
 	while (*s != '\0') {
-
+		while (*s != '\0' && *s != '<' && *s != '"')
+			s++;
+		
 		if (*s == '<') {
 			s++;
 			p = data;
@@ -91,6 +93,7 @@ token_stream *lex(char *inp) {
 				*p++ = *s++;
 			if (*s == '\0') {
 				insert_end_token(ts);
+				return ts;
 			}
 			*p = '\0';
 			token *t = create_token(TEXT_VALUE, data);
@@ -98,8 +101,7 @@ token_stream *lex(char *inp) {
 			s++;
 		}
 
-		while (isblank(*s))
-			s++;
+
 	}
 
 	insert_end_token(ts);
@@ -190,7 +192,7 @@ typedef struct db_t {
 	struct db_t *next;
 } db_t;
 
-db_t *db;
+db_t *db = NULL;
 
 db_t *create_db(char *key, char *value) {
 	db_t *db = (db_t *) malloc(sizeof(db_t));
@@ -317,6 +319,36 @@ void print_res(result_t *res) {
 	}
 }
 
+//cleanup functions
+void cleanup_ts(token_stream *ts) {
+	if (ts == NULL)
+		return;
+	if (ts->token->type == TEXT_KEY || ts->token->type == TEXT_VALUE)
+		free(ts->token->data);
+	free(ts->token);
+	cleanup_ts(ts->next);
+	free(ts);
+}
+
+void cleanup_ast(ast_t *ast) {
+	if (ast->op == NOOP || ast->op == SYN_ERR || ast->op == NDB_DATA)
+		return;
+	if (ast->op == OP_SET)
+		cleanup_ast(ast->value);
+	cleanup_ast(ast->key);
+	free(ast);
+}
+
+void cleanup_res(result_t *res) {
+	free(res);
+}
+
+void cleanup(token_stream *ts, ast_t *ast, result_t *res) {
+	cleanup_ts(ts);
+	cleanup_ast(ast);
+	cleanup_res(res);
+}
+
 int main() {
 	puts("NDB version 0.0.1");
 	puts("Press Ctrl+C to exit");
@@ -332,6 +364,7 @@ int main() {
 		result_t *res = eval(ast);
 		print_res(res);
 
+		cleanup(ts, ast, res);
 		free(input);
 	}
 }
