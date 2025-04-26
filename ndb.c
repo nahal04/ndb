@@ -9,6 +9,7 @@
 
 enum {TEXT_KEY, TEXT_VALUE, NDB_END, NDB_ERR};
 enum {NOOP, OP_GET, OP_SET, NDB_DATA, SYN_ERR};
+enum {RES_OK, RES_ERR};
 
 typedef struct {
 	int type;
@@ -178,9 +179,148 @@ void print_ast(ast_t *ast) {
 
 void print_ast_ln(ast_t *ast) {print_ast(ast); putchar('\n');}
 
+typedef struct {
+	int ok;
+	char *data;
+} result_t;
+
+typedef struct db_t {
+	char *key;
+	char *value;
+	struct db_t *next;
+} db_t;
+
+db_t *db;
+
+db_t *create_db(char *key, char *value) {
+	db_t *db = (db_t *) malloc(sizeof(db_t));
+	db->key = strdup(key);
+	db->value = strdup(value);
+	db->next = NULL;
+	return db;
+}
+
+void init_db() {
+	db = (db_t *) malloc(sizeof(db_t));
+	db->key = NULL;
+	db->value = NULL;
+	db->next = NULL;
+}
+
+void insert_db(db_t *db, db_t *node) {
+	db_t *temp = db->next;
+	db->next = node;
+	node->next = temp;
+}
+
+db_t *find_db(db_t *db, char *k) {
+	db_t *p = db->next;
+
+	while (p != NULL) {
+		if (strcmp(p->key, k) == 0)
+			return p;
+		p = p->next;
+	}
+
+	return NULL;
+}
+
+
+result_t *get_db(char *k) {
+	result_t *res = (result_t *) malloc(sizeof(result_t));
+	if (db == NULL) {
+		res->ok = RES_ERR;
+		res->data = "No Database initialized";
+	}
+	
+	db_t *res_db = find_db(db, k);
+	if (res_db == NULL) {
+		res->ok = RES_ERR;
+		res->data = "Not found";
+		return res;
+	}
+	
+	res->ok = RES_OK;
+	res->data = res_db->value;
+	return res;
+}
+
+result_t *set_db(char *k, char *v) {
+	result_t *res = (result_t *) malloc(sizeof(result_t));
+	if (db == NULL) {
+		res->ok = RES_ERR;
+		res->data = "No Database initialized";
+	}
+
+	db_t *res_db = find_db(db, k);
+	if (res_db == NULL) {
+		res_db = create_db(k, v);
+		insert_db(db, res_db);
+	} else {
+		free(res_db->value);
+		res_db->value = strdup(v);
+	}
+
+	res->ok = RES_OK;
+	res->data = k;
+	return res;
+}
+
+result_t *create_result(int status, char *data) {
+	result_t *res = malloc(sizeof(result_t));
+	res->ok = status;
+	res->data = data;
+	return res;
+}
+
+result_t *eval(ast_t *ast) {
+	if (ast->op == NOOP)
+		return NULL;
+
+	if (ast->op == NDB_DATA) {
+		result_t *res = malloc(sizeof(result_t));
+		res->ok = RES_OK;
+		res->data = ast->data;
+		return res;
+	}
+
+	if (ast->op == OP_GET) {
+		result_t *key = eval(ast->key);
+		if (key->ok == RES_ERR)
+			return key;
+		return get_db(key->data);
+	}
+
+	if (ast->op == OP_SET) {
+		result_t *k = eval(ast->key);
+		result_t *v = eval(ast->value);
+		if (k->ok == RES_ERR)
+			return k;
+		if (v->ok == RES_ERR) 
+			return v;
+		return set_db(k->data, v->data);
+	}
+
+		result_t *res = malloc(sizeof(result_t));
+		res->ok = RES_ERR;
+		res->data = "Syntax error";
+		return res;
+}
+
+void print_res(result_t *res) {
+	if (res == NULL)
+		return;
+	if (res->ok == RES_OK) {
+		printf("%s\n", res->data);
+	} else {
+		fprintf(stderr, "Error: %s\n", res->data);
+	}
+}
+
 int main() {
 	puts("NDB version 0.0.1");
 	puts("Press Ctrl+C to exit");
+	init_db();
 
 	while (1) {
 		char *input = readline("ndb> ");
@@ -189,7 +329,8 @@ int main() {
 		
 		token_stream *ts = lex(input);
 		ast_t *ast = parse(ts);
-		print_ast_ln(ast);	
+		result_t *res = eval(ast);
+		print_res(res);
 
 		free(input);
 	}
