@@ -7,9 +7,9 @@
 
 #define DATA_MAX 1024
 
-enum {TEXT_KEY, TEXT_VALUE, NDB_END};
+enum {TEXT_KEY, TEXT_VALUE, NDB_END, KEY_INDEX};
 enum {NOOP, OP_GET, OP_SET, NDB_DATA, SYN_ERR};
-enum {RES_OK, RES_ERR};
+enum {RES_OK, RES_ERR, RES_NOOP};
 
 typedef struct {
 	int type;
@@ -69,7 +69,7 @@ token_stream *lex(char *inp) {
 	while (isblank(*s))
 	s++;
 	while (*s != '\0') {
-		while (*s != '\0' && *s != '<' && *s != '"')
+		while (*s != '\0' && *s != '<' && *s != '"' && *s != '[')
 			s++;
 		
 		if (*s == '<') {
@@ -101,6 +101,21 @@ token_stream *lex(char *inp) {
 			s++;
 		}
 
+		if (*s == '[') {
+			s++;
+			p = data;
+			while (*s != '\0' && *s != ']')
+				*p++ = *s++;
+			if (*s == '\0') {
+				insert_end_token(ts);
+				return ts;
+			}
+			*p = '\0';
+			token *t = create_token(KEY_INDEX, data);
+			insert_token(ts, t);
+			s++;
+		}
+
 
 	}
 
@@ -125,6 +140,8 @@ ast_t *data_ast(char *s) {
 ast_t *parse(token_stream *ts) {
 	token_stream *tsp = ts;
 	ast_t *ast = (ast_t *) malloc(sizeof(ast_t));
+	ast->data = NULL;
+	ast->key = ast->value = NULL;
 
 	if (tsp->token->type == NDB_END) {
 		ast->op = NOOP;
@@ -136,6 +153,10 @@ ast_t *parse(token_stream *ts) {
 		tsp = tsp->next;
 		if (tsp->token->type  == NDB_END)
 			ast->op = OP_GET;
+		else if (tsp->token->type == KEY_INDEX) {
+			ast->op = OP_GET;
+			ast->data = tsp->token->data;
+		}
 		else if (tsp->token->type == TEXT_VALUE) {
 			ast->op = OP_SET;
 			ast->value = data_ast(tsp->token->data);
@@ -228,30 +249,30 @@ db_t *find_db(db_t *db, char *k) {
 }
 
 
-result_t *get_db(char *k) {
-	result_t *res = (result_t *) malloc(sizeof(result_t));
+result_t get_db(char *k) {
+	result_t res;
 	if (db == NULL) {
-		res->ok = RES_ERR;
-		res->data = "No Database initialized";
+		res.ok = RES_ERR;
+		res.data = "No Database initialized";
 	}
 	
 	db_t *res_db = find_db(db, k);
 	if (res_db == NULL) {
-		res->ok = RES_ERR;
-		res->data = "Not found";
+		res.ok = RES_ERR;
+		res.data = "Not found";
 		return res;
 	}
 	
-	res->ok = RES_OK;
-	res->data = res_db->value;
+	res.ok = RES_OK;
+	res.data = strdup(res_db->value);
 	return res;
 }
 
-result_t *set_db(char *k, char *v) {
-	result_t *res = (result_t *) malloc(sizeof(result_t));
+result_t set_db(char *k, char *v) {
+	result_t res;
 	if (db == NULL) {
-		res->ok = RES_ERR;
-		res->data = "No Database initialized";
+		res.ok = RES_ERR;
+		res.data = "No Database initialized";
 	}
 
 	db_t *res_db = find_db(db, k);
@@ -263,59 +284,94 @@ result_t *set_db(char *k, char *v) {
 		res_db->value = strdup(v);
 	}
 
-	res->ok = RES_OK;
-	res->data = k;
+	res.ok = RES_OK;
+	res.data = strdup(k);
 	return res;
 }
 
-result_t *create_result(int status, char *data) {
-	result_t *res = malloc(sizeof(result_t));
-	res->ok = status;
-	res->data = data;
-	return res;
-}
+result_t get_value_indexed(result_t res, char *ind) {
+	int i = (int) strtol(ind, NULL, 10);
+	if (i < 0) {
+		res.ok = RES_ERR;
+		free(res.data);
+		res.data = "Out of bound access";
+	} 
+	int comma_count = 0;
+	char *p = res.data;
+	while (*p != '\0' && comma_count < i) {
+		if (*p++ == ',')
+			comma_count++;
+	}
+	if (*p == '\0' && comma_count < i) {
+		res.ok = RES_ERR;
+		free(res.data);
+		res.data = "Out of bound access";
+		return res;
+	}
+	char *end = p;
+	while (*end != '\0' && *end != ',')
+		end++;
 
-result_t *eval(ast_t *ast) {
-	if (ast->op == NOOP)
-		return NULL;
+	*end = '\0';
+
+	char *s = strdup(p);
+	free(res.data);
+	res.data = s;
+	res.ok = RES_OK;
+	return res;
+} 
+
+result_t eval(ast_t *ast) {
+	result_t res;
+	if (ast->op == NOOP) {
+		res.ok = RES_NOOP;
+		res.data = NULL;
+		return res;
+	}
+
 
 	if (ast->op == NDB_DATA) {
-		result_t *res = malloc(sizeof(result_t));
-		res->ok = RES_OK;
-		res->data = ast->data;
+		res.ok = RES_OK;
+		res.data = strdup(ast->data);
 		return res;
 	}
 
 	if (ast->op == OP_GET) {
-		result_t *key = eval(ast->key);
-		if (key->ok == RES_ERR)
+		result_t key = eval(ast->key);
+		if (key.ok == RES_ERR)
 			return key;
-		return get_db(key->data);
+		res = get_db(key.data);
+		free(key.data);
+		if (ast->data == NULL || res.ok == RES_ERR)
+			return res;
+		return get_value_indexed(res, ast->data);
 	}
 
 	if (ast->op == OP_SET) {
-		result_t *k = eval(ast->key);
-		result_t *v = eval(ast->value);
-		if (k->ok == RES_ERR)
+		result_t k = eval(ast->key);
+		result_t v = eval(ast->value);
+		if (k.ok == RES_ERR)
 			return k;
-		if (v->ok == RES_ERR) 
+		if (v.ok == RES_ERR) 
 			return v;
-		return set_db(k->data, v->data);
+		res = set_db(k.data, v.data);
+		free(k.data);
+		free(v.data);
+		return res;
 	}
 
-		result_t *res = malloc(sizeof(result_t));
-		res->ok = RES_ERR;
-		res->data = "Syntax error";
+		res.ok = RES_ERR;
+		res.data = "Syntax error";
 		return res;
 }
 
-void print_res(result_t *res) {
-	if (res == NULL)
+void print_res(result_t res) {
+	if (res.ok == RES_NOOP)
 		return;
-	if (res->ok == RES_OK) {
-		printf("%s\n", res->data);
+	if (res.ok == RES_OK) {
+		printf("%s\n", res.data);
 	} else {
-		fprintf(stderr, "Error: %s\n", res->data);
+		fprintf(stderr, "Error: %s\n", res.data);
 	}
 }
 
@@ -339,11 +395,12 @@ void cleanup_ast(ast_t *ast) {
 	free(ast);
 }
 
-void cleanup_res(result_t *res) {
-	free(res);
+void cleanup_res(result_t res) {
+	if (res.ok == RES_OK)
+		free(res.data);
 }
 
-void cleanup(token_stream *ts, ast_t *ast, result_t *res) {
+void cleanup(token_stream *ts, ast_t *ast, result_t res) {
 	cleanup_ts(ts);
 	cleanup_ast(ast);
 	cleanup_res(res);
@@ -361,7 +418,7 @@ int main() {
 		
 		token_stream *ts = lex(input);
 		ast_t *ast = parse(ts);
-		result_t *res = eval(ast);
+		result_t res = eval(ast);
 		print_res(res);
 
 		cleanup(ts, ast, res);
