@@ -6,8 +6,9 @@
 #include <readline/history.h>
 
 #define DATA_MAX 1024
+#define SUB_COMMAND_MAX 1024
 
-enum {TEXT_KEY, TEXT_VALUE, NDB_END, KEY_INDEX};
+enum {TEXT_KEY, TEXT_VALUE, NDB_END, KEY_INDEX, SUB_COMMAND};
 enum {NOOP, OP_GET, OP_SET, NDB_DATA, SYN_ERR};
 enum {RES_OK, RES_ERR, RES_NOOP};
 
@@ -58,6 +59,10 @@ void insert_end_token(token_stream *ts) {
 	insert_token(ts, t);
 }
 
+int parse_sub_command(char **s, char **p);
+
+
+
 
 token_stream *lex(char *inp) {
 	char *s = inp;
@@ -75,8 +80,19 @@ token_stream *lex(char *inp) {
 		if (*s == '<') {
 			s++;
 			p = data;
-			while (*s != '\0' && *s != '>')
-				*p++ = *s++;
+			while (*s != '\0' && *s != '>') {
+				if (*s == '(') {
+					s++;
+					int k = parse_sub_command(&s, &p);	
+					if (k) {
+						insert_end_token(ts);
+						return ts;
+					}
+					s++;
+				} else {
+					*p++ = *s++;
+				}
+			}
 			if (*s == '\0') {
 				insert_end_token(ts);
 				return ts;
@@ -89,8 +105,18 @@ token_stream *lex(char *inp) {
 		if (*s == '"') {
 			s++;
 			p = data;
-			while (*s != '\0' && *s != '"')
-				*p++ = *s++;
+			while (*s != '\0' && *s != '"') {
+				if (*s == '(') {
+					s++;
+					int k = parse_sub_command(&s, &p);	
+					if (k) {
+						insert_end_token(ts);
+						return ts;
+					}
+					s++;
+				} else 
+					*p++ = *s++;
+			}
 			if (*s == '\0') {
 				insert_end_token(ts);
 				return ts;
@@ -104,8 +130,18 @@ token_stream *lex(char *inp) {
 		if (*s == '[') {
 			s++;
 			p = data;
-			while (*s != '\0' && *s != ']')
-				*p++ = *s++;
+			while (*s != '\0' && *s != ']') {
+				if (*s == '(') {
+					s++;
+					int k = parse_sub_command(&s, &p);	
+					if (k) {
+						insert_end_token(ts);
+						return ts;
+					}
+					s++;
+				} else 
+					*p++ = *s++;
+			}
 			if (*s == '\0') {
 				insert_end_token(ts);
 				return ts;
@@ -115,7 +151,6 @@ token_stream *lex(char *inp) {
 			insert_token(ts, t);
 			s++;
 		}
-
 
 	}
 
@@ -404,6 +439,33 @@ void cleanup(token_stream *ts, ast_t *ast, result_t res) {
 	cleanup_ts(ts);
 	cleanup_ast(ast);
 	cleanup_res(res);
+}
+
+int parse_sub_command(char **s, char **p) {
+	char temp[SUB_COMMAND_MAX];
+	int i = 0;
+	while (i < SUB_COMMAND_MAX && **s != ')' && **s != '\0') {
+		temp[i++] = **s;
+		(*s)++;
+	}
+
+	temp[i] = '\0';
+	if (**s == ')') {
+		token_stream *ts = lex(temp);
+		ast_t *ast = parse(ts);
+		result_t res = eval(ast);
+		if (res.ok == RES_OK) {
+			char *j = res.data;
+			while (*j != '\0') {
+				**p = *j++;
+				(*p)++;
+			}
+			cleanup(ts, ast, res);
+			return 0;
+		}
+		cleanup(ts, ast, res);
+	}
+	return 1;
 }
 
 int main() {
