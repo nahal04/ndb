@@ -2,6 +2,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/stat.h>
 #include <readline/readline.h>
 #include <readline/history.h>
 
@@ -468,15 +471,92 @@ int parse_sub_command(char **s, char **p) {
 	return 1;
 }
 
-int main() {
-	puts("NDB version 0.0.1");
-	puts("Press Ctrl+C to exit");
+void close_db(db_t *db) {
+	if (db == NULL)
+		return;
+	free(db->key);
+	free(db->value);
+	close_db(db->next);
+	free(db);
+}
+
+void init_db_from_file(char *filename) {
 	init_db();
+	int fd = open(filename, O_RDONLY);
+	if (fd == -1) {
+		perror("Read");
+		return;
+	}
+
+	int len, total;
+
+	char *k, *v, *s;
+	ssize_t bytes;
+
+	while (read(fd, &len, sizeof(int)) == sizeof(int)) {
+
+		s = malloc(sizeof(char) * len);
+		
+		total = 0;
+		while (total < len) {
+			bytes = read(fd, s + total, len - total);
+			if (bytes <= 0) {
+				close(fd);
+				return;
+			}
+			total += bytes;
+		}
+		
+		k = s;
+		v = s + strlen(k) + 1;
+		db_t *new_db = create_db(k, v);	
+		insert_db(db, new_db);
+		free(s);
+	}
+	close(fd);
+}
+
+int commit_db_to_file(char *filename) {
+	int fd = open(filename, O_WRONLY | O_CREAT, S_IRUSR | S_IWUSR);
+	if (fd == -1) {
+		perror("write");
+		close_db(db);
+		return -1;	
+	}
+
+	db_t *dbp = db->next;
+
+	while (dbp != NULL) {
+		int len = strlen(dbp->key) + strlen(dbp->value) + 2;
+		
+		write(fd, &len, sizeof(int));
+		write(fd, dbp->key, strlen(dbp->key) + 1);
+		write(fd, dbp->value, strlen(dbp->value) + 1);
+
+		dbp = dbp->next;
+	}
+	close(fd);
+	close_db(db);
+	return 0;
+}
+
+int main(int argc, char *argv[]) {
+	puts("NDB version 0.1.0");
+	puts("Press Ctrl+C to exit");
+
+	
+	if (argc > 2) {
+		fprintf(stderr, "Error: too many arguments");
+	}
+	
+	if (argc == 2) init_db_from_file(argv[1]);
+	else init_db();
 
 	while (1) {
 		char *input = readline("ndb> ");
 
 		if (input && *input) add_history(input);
+		if (strcmp(input, "q") == 0) break;
 		
 		token_stream *ts = lex(input);
 		ast_t *ast = parse(ts);
@@ -486,5 +566,8 @@ int main() {
 		cleanup(ts, ast, res);
 		free(input);
 	}
+
+	if (argc == 2) commit_db_to_file(argv[1]);
+	else close_db(db);
 }
 
