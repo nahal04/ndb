@@ -648,7 +648,7 @@ int setup_server(char *port) {
 }
 
 int main(int argc, char *argv[]) {
-	puts("NDB version 0.1.0");
+	puts("NDB version 0.2.0");
 	puts("Press Ctrl+C to exit");
 
 	args a;
@@ -670,7 +670,6 @@ int main(int argc, char *argv[]) {
 		if ((client_fd = setup_server(a.port)) == -1)
 			exit(EXIT_FAILURE);
 		input = malloc(256);
-		printf("sok: %d\n", client_fd);
 	}
 
 	ssize_t bytes;
@@ -683,7 +682,7 @@ int main(int argc, char *argv[]) {
 				exit(EXIT_FAILURE);
 			}
 
-			input[bytes] = '\0';
+			input[bytes - 1] = '\0';
 
 			if (strcmp(input, "q") == 0) {
 				close(client_fd);
