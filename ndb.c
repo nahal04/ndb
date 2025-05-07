@@ -540,16 +540,69 @@ int commit_db_to_file(char *filename) {
 	return 0;
 }
 
+typedef struct {
+	char *infile;
+	char *outfile;
+	int servermode;
+	char *port;
+
+	char *error;
+} args;
+
+int parse_args(int argc, char *argv[], args *arg) {
+	arg->infile = NULL;
+	arg->outfile = NULL;
+	arg->error = NULL;
+	arg->servermode = 0;
+	while (--argc) {
+		if (strcmp(*(++argv), "--server") == 0) {
+			if (!(--argc)) {
+				arg->error = "No port number specified";
+				return -1;
+			}
+			arg->servermode = 1;
+			arg->port = strdup(*(++argv));
+		}
+		else if (strcmp(*argv, "--infile") == 0) {
+			if (!(--argc)) {
+				arg->error = "No input file specified";
+				return -1;
+			}
+
+			arg->infile = strdup(*(++argv));
+		}
+		else if (strcmp(*argv, "--outfile") == 0) {
+			if (!(--argc)) {
+				arg->error = "No output file specified";
+				return -1;
+			}
+
+			arg->infile = strdup(*(++argv));
+		}
+		else {
+			arg->error = malloc(sizeof(char) * 64);
+			sprintf(arg->error, "Unknown argument %s", *(argv));
+			return -1;
+		}
+	}
+
+	return 0;
+}
+
 int main(int argc, char *argv[]) {
 	puts("NDB version 0.1.0");
 	puts("Press Ctrl+C to exit");
 
-	
-	if (argc > 2) {
-		fprintf(stderr, "Error: too many arguments");
+	args a;
+	if (parse_args(argc, argv, &a) == -1) {
+		fprintf(stderr, a.error);
+		free(a.error);
+		free(a.infile);
+		free(a.outfile);
+		exit(EXIT_FAILURE);
 	}
 	
-	if (argc == 2) init_db_from_file(argv[1]);
+	if (a.infile != NULL) init_db_from_file(a.infile);
 	else init_db();
 
 	while (1) {
@@ -567,7 +620,7 @@ int main(int argc, char *argv[]) {
 		free(input);
 	}
 
-	if (argc == 2) commit_db_to_file(argv[1]);
+	if (a.outfile != NULL) commit_db_to_file(a.outfile);
 	else close_db(db);
 }
 
