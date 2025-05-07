@@ -5,6 +5,10 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#include <sys/socket.h>
+#include <sys/types.h>
+#include <netdb.h>
+#include <errno.h>
 #include <readline/readline.h>
 #include <readline/history.h>
 
@@ -589,6 +593,60 @@ int parse_args(int argc, char *argv[], args *arg) {
 	return 0;
 }
 
+
+
+int setup_server(char *port) {
+	int sfd, s;
+	struct addrinfo hints;
+	struct addrinfo *result, *rp;
+
+	memset(&hints, 0, sizeof(hints));
+	hints.ai_family = AF_UNSPEC;
+	hints.ai_socktype = SOCK_STREAM;
+	hints.ai_flags = AI_PASSIVE;
+
+	s = getaddrinfo(NULL, port, &hints, &result);
+	
+	if (s != 0) {
+		fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(s));
+		return -1;
+	}
+
+	for (rp = result; rp != NULL; rp = rp->ai_next) {
+		sfd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
+		if (sfd == -1)
+			continue;
+		if (bind(sfd, rp->ai_addr, rp->ai_addrlen) == 0)
+			break;
+		
+		close(sfd);
+	}
+
+	freeaddrinfo(result);
+
+	if (rp == NULL) {
+		fprintf(stderr, "Could not bind\n");
+		close(sfd);
+		return -1;
+	}
+
+
+
+	if (listen(sfd, 1) == -1) {
+		perror("listen");
+		return -1;
+	}
+
+	int client_fd = accept(sfd, NULL, NULL);
+	if (client_fd == -1) {
+		perror("accept");
+		close(sfd);
+		return -1;
+	}
+
+	return client_fd;
+}
+
 int main(int argc, char *argv[]) {
 	puts("NDB version 0.1.0");
 	puts("Press Ctrl+C to exit");
@@ -604,20 +662,63 @@ int main(int argc, char *argv[]) {
 	
 	if (a.infile != NULL) init_db_from_file(a.infile);
 	else init_db();
+	
+	int client_fd;
+	char *input;
+	char newline = '\n';
+	if (a.servermode) {
+		if ((client_fd = setup_server(a.port)) == -1)
+			exit(EXIT_FAILURE);
+		input = malloc(256);
+		printf("sok: %d\n", client_fd);
+	}
 
+	ssize_t bytes;
+		
 	while (1) {
-		char *input = readline("ndb> ");
+		if (a.servermode) {
+			bytes = recv(client_fd, input, 256, 0);
+			if (bytes == -1) {
+				perror("recv");
+				exit(EXIT_FAILURE);
+			}
 
-		if (input && *input) add_history(input);
-		if (strcmp(input, "q") == 0) break;
+			input[bytes] = '\0';
+
+			if (strcmp(input, "q") == 0) {
+				close(client_fd);
+				free(input);
+				break;
+			}
+		} else {
+
+			input = readline("ndb> ");
+			
+			if (input && *input) add_history(input);
+			if (strcmp(input, "q") == 0) break;
+		}
 		
 		token_stream *ts = lex(input);
 		ast_t *ast = parse(ts);
 		result_t res = eval(ast);
-		print_res(res);
+		if (a.servermode) {
+			if (res.ok == RES_OK || res.ok == RES_ERR) {
+				bytes = send(client_fd, res.data, strlen(res.data), 0);
+				if (bytes == -1) {
+					perror("send");
+					close(client_fd);
+					exit(EXIT_FAILURE);
+				}
 
-		cleanup(ts, ast, res);
-		free(input);
+			}
+			send(client_fd, &newline, 1, 0); // for testing purposes
+			cleanup(ts, ast, res);
+		} else {
+			print_res(res);
+			cleanup(ts, ast, res);
+			free(input);
+		} 
+
 	}
 
 	if (a.outfile != NULL) commit_db_to_file(a.outfile);
